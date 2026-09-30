@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: docai
+      POSTGRES_PASSWORD: docai
+      POSTGRES_DB: docai
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docai"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://docai:docai@db:5432/docai
+      STORAGE_PATH: /app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - storage_data:/app/storage
+      - paddleocr_models:/root/.paddlex
+    # PaddleOCR runs on CPU by default (slower). To use a GPU, install
+    # the NVIDIA Container Toolkit and a compatible PaddlePaddle GPU build, then
+    # set PADDLEOCR_DEVICE=gpu:0 and
+    # uncomment:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  db_data:
+  storage_data:
+  paddleocr_models:

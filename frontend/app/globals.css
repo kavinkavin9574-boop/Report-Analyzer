@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+html, body {
+  background-color: #F7F6F2;
+  color: #141A2E;
+}
+
+html.dark, html.dark body {
+  background-color: #0E1220;
+  color: #F7F6F2;
+}
+
+body {
+  font-family: Inter, system-ui, sans-serif;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+::selection {
+  background-color: #E1EDE9;
+  color: #141A2E;
+}
+
+.dark ::selection {
+  background-color: #2F6F62;
+  color: #F7F6F2;
+}
+
+.evidence-highlight {
+  background-color: rgba(199, 125, 46, 0.25);
+  outline: 1.5px solid #C77D2E;
+}
+
+/* Reduced motion respect */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
