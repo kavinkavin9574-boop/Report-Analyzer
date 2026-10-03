@@ -4,10 +4,13 @@ import os
 os.environ["DATABASE_URL"] = "sqlite:///./test_api.db"
 os.environ["STORAGE_PATH"] = "./storage_test_api"
 
+from datetime import datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.schemas.document import DocumentAnalysisOut, DocumentOut
 from app.core.database import SessionLocal
 from app.models.analysis import AIModelLog, ChatMessage, ChatSession, Evidence, Finding
 from app.models.document import Document
@@ -30,6 +33,12 @@ def cleanup():
     for f in ["test_api.db", "test_api.db-journal"]:
         if os.path.exists(f):
             os.remove(f)
+
+
+def test_ocr_runtime_disables_problematic_paddle_flags():
+    assert os.environ.get("FLAGS_enable_pir_api") == "0"
+    assert os.environ.get("FLAGS_use_onednn") == "0"
+    assert os.environ.get("FLAGS_use_mkldnn") == "0"
 
 
 def test_health_check(client):
@@ -69,6 +78,36 @@ def test_documents_require_auth(client):
 def test_dashboard_stats_require_auth(client):
     res = client.get("/api/dashboard/stats")
     assert res.status_code == 401
+
+
+def test_analysis_response_supports_structured_summary_and_fields():
+    doc = DocumentOut(
+        id=1,
+        filename="invoice.pdf",
+        document_type="invoice",
+        status="completed",
+        page_count=1,
+        file_size=1024,
+        error_message=None,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+
+    analysis = DocumentAnalysisOut(
+        document=doc,
+        summary={"text": "Invoice paid in full.", "key_points": ["Vendor: Acme", "Total: $1,250.00"]},
+        extracted_fields={"invoice_number": "INV-1001", "total": 1250.0},
+        findings=[],
+        deadlines=[],
+        obligations=[],
+        financial_values=[],
+        anomalies=[],
+        missing_data=[],
+    )
+
+    assert analysis.model_dump()["summary"]["text"] == "Invoice paid in full."
+    assert analysis.extracted_fields["invoice_number"] == "INV-1001"
+    assert analysis.extracted_fields["total"] == 1250.0
 
 
 def test_delete_document_cleans_up_references(client):

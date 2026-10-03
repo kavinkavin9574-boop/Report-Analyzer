@@ -46,7 +46,7 @@ class OpenAIProvider(AIProvider):
         response = await self._client.chat.completions.create(
             model=model,
             temperature=temperature,
-            max_tokens=2048,
+            max_tokens=1950,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

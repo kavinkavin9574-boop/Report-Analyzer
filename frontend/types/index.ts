@@ -81,9 +81,15 @@ export interface MissingData {
   description: string | null;
 }
 
+export interface StructuredSummary {
+  text: string;
+  key_points: string[];
+}
+
 export interface DocumentAnalysis {
   document: Document;
-  summary: string | null;
+  summary: StructuredSummary | string | null;
+  extracted_fields: Record<string, string | number | boolean | null>;
   model_used: string | null;
   findings: Finding[];
   deadlines: Deadline[];

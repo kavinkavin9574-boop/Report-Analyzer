@@ -241,12 +241,20 @@ function EvidenceButton({ evidence, onClick }: { evidence: Evidence | null; onCl
 function OverviewTab({
   analysis, onEvidence,
 }: { analysis: DocumentAnalysis; onEvidence: (e: Evidence) => void }) {
+  const summaryText = typeof analysis.summary === "string" ? analysis.summary : analysis.summary?.text ?? "";
+  const summaryPoints = typeof analysis.summary === "string" ? [] : analysis.summary?.key_points ?? [];
+
   return (
     <div className="space-y-6">
-      {analysis.summary && (
+      {summaryText && (
         <div className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900 p-5">
           <h2 className="text-sm font-medium mb-2">Summary</h2>
-          <p className="text-sm text-ink-700 leading-relaxed">{analysis.summary}</p>
+          <p className="text-sm text-ink-700 leading-relaxed">{summaryText}</p>
+          {summaryPoints.length > 0 && (
+            <ul className="mt-3 list-disc pl-5 text-sm text-ink-700 leading-relaxed space-y-1">
+              {summaryPoints.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}
+            </ul>
+          )}
           {analysis.model_used && <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">Analyzed with {analysis.model_used}</p>}
         </div>
       )}
@@ -255,22 +263,33 @@ function OverviewTab({
         <div className="px-5 py-3 border-b border-slate-300/70 dark:border-ink-700/60">
           <h2 className="text-sm font-medium">Extracted fields</h2>
         </div>
-        {analysis.findings.length === 0 ? (
+        {analysis.findings.length === 0 && Object.keys(analysis.extracted_fields ?? {}).length === 0 ? (
           <p className="px-5 py-8 text-sm text-slate-500 dark:text-slate-400 text-center">No fields extracted yet.</p>
         ) : (
           <div className="divide-y divide-slate-300/40 dark:divide-ink-700/50">
-            {analysis.findings.map((f) => (
-              <div key={f.id} className="flex items-center justify-between gap-4 px-5 py-3">
-                <div className="min-w-0">
-                  <p className="text-xs text-slate-500 dark:text-slate-400">{formatFieldName(f.field_name)}</p>
-                  <p className="text-sm truncate">{f.field_value}</p>
+            {Object.entries(analysis.extracted_fields ?? {}).length > 0 ? (
+              Object.entries(analysis.extracted_fields ?? {}).map(([key, value]) => (
+                <div key={key} className="flex items-center justify-between gap-4 px-5 py-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{formatFieldName(key)}</p>
+                    <p className="text-sm truncate">{String(value)}</p>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <span className="text-xs text-slate-400 dark:text-slate-500">{Math.round(f.confidence * 100)}%</span>
-                  <EvidenceButton evidence={f.evidence} onClick={onEvidence} />
+              ))
+            ) : (
+              analysis.findings.map((f) => (
+                <div key={f.id} className="flex items-center justify-between gap-4 px-5 py-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{formatFieldName(f.field_name)}</p>
+                    <p className="text-sm truncate">{f.field_value}</p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-xs text-slate-400 dark:text-slate-500">{Math.round(f.confidence * 100)}%</span>
+                    <EvidenceButton evidence={f.evidence} onClick={onEvidence} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         )}
       </div>

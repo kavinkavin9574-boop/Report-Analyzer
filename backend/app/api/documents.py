@@ -14,7 +14,7 @@ from app.models.analysis import (
     AIModelLog, Analysis, ChatMessage, ChatSession, Deadline, Evidence, Finding,
     Obligation, FinancialValue, Anomaly, MissingData,
 )
-from app.schemas.document import DocumentOut, DocumentAnalysisOut
+from app.schemas.document import DocumentOut, DocumentAnalysisOut, StructuredSummary
 from app.services.pipeline import process_document
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -153,6 +153,28 @@ def reanalyze_document(
     return {"detail": "Re-analysis started"}
 
 
+def _normalize_summary(summary: str | None) -> StructuredSummary | str | None:
+    if summary is None:
+        return None
+    if isinstance(summary, dict):
+        return StructuredSummary.model_validate(summary)
+    return StructuredSummary(text=summary, key_points=[])
+
+
+def _build_extracted_fields(doc) -> dict:
+    extracted: dict[str, object] = {}
+
+    for field in doc.findings:
+        if field.field_name and field.field_value not in (None, ""):
+            extracted[field.field_name] = field.field_value
+
+    for value in doc.financial_values:
+        if value.label and value.value is not None:
+            extracted[value.label] = value.value
+
+    return extracted
+
+
 @router.get("/{document_id}/analysis", response_model=DocumentAnalysisOut)
 def get_analysis(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     doc = _get_owned_document(db, document_id, current_user)
@@ -161,7 +183,8 @@ def get_analysis(document_id: int, db: Session = Depends(get_db), current_user: 
     )
     return DocumentAnalysisOut(
         document=DocumentOut.model_validate(doc),
-        summary=latest_analysis.summary if latest_analysis else None,
+        summary=_normalize_summary(latest_analysis.summary if latest_analysis else None),
+        extracted_fields=_build_extracted_fields(doc),
         model_used=latest_analysis.model_used if latest_analysis else None,
         findings=doc.findings,
         deadlines=doc.deadlines,

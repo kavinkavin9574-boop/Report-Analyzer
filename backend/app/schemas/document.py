@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 
@@ -103,11 +103,17 @@ class MissingDataOut(BaseModel):
         from_attributes = True
 
 
+class StructuredSummary(BaseModel):
+    text: str
+    key_points: list[str] = []
+
+
 class DocumentAnalysisOut(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     document: DocumentOut
-    summary: Optional[str] = None
+    summary: Optional[StructuredSummary | str] = None
+    extracted_fields: dict[str, Any] = {}
     model_used: Optional[str] = None
     findings: list[FindingOut] = []
     deadlines: list[DeadlineOut] = []
