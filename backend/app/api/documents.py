@@ -139,6 +139,7 @@ def reanalyze_document(
 ):
     doc = _get_owned_document(db, document_id, current_user)
     # Clear previous analysis artifacts before re-running
+    doc.pages.clear()
     db.query(Finding).filter(Finding.document_id == doc.id).delete()
     db.query(Deadline).filter(Deadline.document_id == doc.id).delete()
     db.query(Obligation).filter(Obligation.document_id == doc.id).delete()

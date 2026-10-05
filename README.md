@@ -27,7 +27,6 @@ PNG, or JPG — including scanned pages) and the system will:
 intelligent-document-ai/
 ├── frontend/    Next.js 14 (App Router) + TypeScript + Tailwind
 ├── backend/     FastAPI + SQLAlchemy + Postgres
-└── docker-compose.yml
 ```
 
 **Pipeline:** upload → validate → store → extract text (PyMuPDF) → OCR
@@ -85,13 +84,13 @@ icons.
 ### Prerequisites
 - Python 3.12+
 - Node.js 20+
-- PostgreSQL 16 (or use the provided Docker Compose)
+- PostgreSQL 16
 - OCR runs on [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 3.x with
   PaddlePaddle, installed via `pip install -r requirements.txt`. On first OCR
   call it downloads its detection/recognition models and caches them under
-  `~/.paddlex` (network access is needed once; Docker Compose persists the
-  cache in the `paddleocr_models` volume). CPU is the default; GPU deployments
-  need a compatible PaddlePaddle GPU build and `PADDLEOCR_DEVICE=gpu:0`.
+  `~/.paddlex` (network access is needed once). CPU is the default; GPU
+  deployments need a compatible PaddlePaddle GPU build and
+  `PADDLEOCR_DEVICE=gpu:0`.
 
 ### Backend
 
@@ -139,23 +138,13 @@ MAX_FILE_SIZE=26214400
 
 ## 7. Database setup
 
-With Docker Compose, Postgres is provisioned automatically. Running the
-backend standalone, create a local database matching `DATABASE_URL` — tables
-are created on app startup via `Base.metadata.create_all`. For a real
-deployment, replace this with Alembic migrations (scaffolding for this is
-straightforward to add under `backend/alembic/`).
+Install and start PostgreSQL locally, then create a database matching
+`DATABASE_URL` in `.env`. Tables are created on app startup via
+`Base.metadata.create_all`. For a real deployment, replace this with Alembic
+migrations (scaffolding for this is straightforward to add under
+`backend/alembic/`).
 
-## 8. Docker
-
-```bash
-cp .env.example .env   # set OPENAI_API_KEY — required for analysis to work
-docker compose up --build
-```
-
-This starts Postgres, the FastAPI backend (`:8000`), and the Next.js frontend
-(`:3000`).
-
-## 9. Testing
+## 8. Testing
 
 ```bash
 cd backend
@@ -175,7 +164,7 @@ report/compliance extraction test fixtures — invoices are the fully wired
 reference implementation; the other document types share the same pipeline
 and prompts but have less test coverage.
 
-## 10. Production deployment notes
+## 9. Production deployment notes
 
 - Swap `BackgroundTasks` in `app/api/documents.py` for a real task queue
   (Celery/RQ) so processing survives a server restart and can scale
@@ -187,7 +176,7 @@ and prompts but have less test coverage.
 - Wire real per-model token pricing into `AIModelLog` cost tracking (a
   usage/cost admin view is a natural next page to add).
 
-## 11. Security notes
+## 10. Security notes
 
 - Passwords hashed with bcrypt; JWT bearer auth (`JWT_SECRET`,
   `JWT_EXPIRE_MINUTES`).
