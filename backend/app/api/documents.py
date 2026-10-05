@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -154,12 +155,23 @@ def reanalyze_document(
     return {"detail": "Re-analysis started"}
 
 
-def _normalize_summary(summary: str | None) -> StructuredSummary | str | None:
+def _normalize_summary(summary: str | dict | None) -> StructuredSummary | str | None:
     if summary is None:
         return None
     if isinstance(summary, dict):
         return StructuredSummary.model_validate(summary)
-    return StructuredSummary(text=summary, key_points=[])
+    if isinstance(summary, str):
+        stripped = summary.strip()
+        if not stripped:
+            return StructuredSummary(text="", key_points=[])
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return StructuredSummary(text=summary, key_points=[])
+        if isinstance(parsed, dict):
+            return StructuredSummary.model_validate(parsed)
+        return StructuredSummary(text=str(parsed), key_points=[])
+    return StructuredSummary(text=str(summary), key_points=[])
 
 
 def _build_extracted_fields(doc) -> dict:
@@ -176,6 +188,21 @@ def _build_extracted_fields(doc) -> dict:
     return extracted
 
 
+def _build_report_text(doc) -> str:
+    latest_pages = {}
+    for page in doc.pages:
+        if not page.raw_text or not page.raw_text.strip():
+            continue
+        current = latest_pages.get(page.page_number)
+        if current is None or page.id > current.id:
+            latest_pages[page.page_number] = page
+
+    return "\n\n".join(
+        f"[PAGE {page.page_number}]\n{page.raw_text or ''}".rstrip()
+        for page in sorted(latest_pages.values(), key=lambda item: item.page_number)
+    )
+
+
 @router.get("/{document_id}/analysis", response_model=DocumentAnalysisOut)
 def get_analysis(document_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     doc = _get_owned_document(db, document_id, current_user)
@@ -186,6 +213,7 @@ def get_analysis(document_id: int, db: Session = Depends(get_db), current_user: 
         document=DocumentOut.model_validate(doc),
         summary=_normalize_summary(latest_analysis.summary if latest_analysis else None),
         extracted_fields=_build_extracted_fields(doc),
+        report_text=_build_report_text(doc),
         model_used=latest_analysis.model_used if latest_analysis else None,
         findings=doc.findings,
         deadlines=doc.deadlines,
@@ -236,3 +264,20 @@ def get_page_image(document_id: int, page_number: int, db: Session = Depends(get
     if not page or not page.image_path or not os.path.exists(page.image_path):
         raise HTTPException(status_code=404, detail="Page image not found")
     return FileResponse(page.image_path, media_type="image/png")
+
+
+@router.get("/{document_id}/original")
+def get_original_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    doc = _get_owned_document(db, document_id, current_user)
+    if not os.path.isfile(doc.storage_path):
+        raise HTTPException(status_code=404, detail="Original document file not found")
+    return FileResponse(
+        doc.storage_path,
+        media_type=doc.mime_type,
+        filename=doc.filename,
+        content_disposition_type="inline",
+    )

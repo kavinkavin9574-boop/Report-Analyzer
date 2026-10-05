@@ -18,7 +18,10 @@ class OpenAIProvider(AIProvider):
 
     def __init__(self, *, default_model: str | None = None, fast_model: str | None = None,
                  reasoning_model: str | None = None, api_key: str, base_url: str | None = None) -> None:
-        client_kwargs = {"api_key": api_key}
+        client_kwargs = {
+            "api_key": api_key,
+            "max_retries": 5,
+        }
         if base_url:
             client_kwargs["base_url"] = base_url
         self._client = AsyncOpenAI(**client_kwargs)

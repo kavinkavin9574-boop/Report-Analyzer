@@ -12,7 +12,7 @@ from app.schemas.document import AIModelSettingsOut, AIModelSettingsIn
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 settings = get_settings()
 
-VALID_PROVIDERS = {"openai", "nvidia"}
+VALID_PROVIDERS = {"openai", "nvidia", "openrouter"}
 
 # A curated list the frontend can suggest — not enforced server-side, since
 # OpenAI adds models faster than this list could stay accurate. Any string

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   FileText, Clock, ListChecks, Wallet, AlertTriangle, FileWarning,
-  ShieldCheck, MessageSquare, X, RefreshCw, Send, Square,
+  ShieldCheck, MessageSquare, X, RefreshCw, Send, Square, Eye,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { StatusBadge } from "@/components/status-badge";
@@ -241,60 +241,185 @@ function EvidenceButton({ evidence, onClick }: { evidence: Evidence | null; onCl
 function OverviewTab({
   analysis, onEvidence,
 }: { analysis: DocumentAnalysis; onEvidence: (e: Evidence) => void }) {
-  const summaryText = typeof analysis.summary === "string" ? analysis.summary : analysis.summary?.text ?? "";
-  const summaryPoints = typeof analysis.summary === "string" ? [] : analysis.summary?.key_points ?? [];
+  const findingByName = new Map(analysis.findings.map((finding) => [finding.field_name, finding]));
+  const rows = Object.entries(analysis.extracted_fields ?? {});
+  const summary = analysis.summary;
+  const summaryText = typeof summary === "string" ? summary.trim() : summary?.text.trim();
+  const keyPoints = typeof summary === "string" ? [] : summary?.key_points ?? [];
+  const hasExtractedDetails = summaryText || keyPoints.length > 0 || rows.length > 0;
+  const [isOriginalOpen, setIsOriginalOpen] = useState(false);
+  const reportPages = analysis.report_text
+    .split(/(?=\[PAGE \d+\]\n)/)
+    .map((page) => {
+      const match = page.match(/^\[PAGE (\d+)\]\n/);
+      return {
+        pageNumber: match ? Number(match[1]) : null,
+        text: page.replace(/^\[PAGE \d+\]\n/, "").trim(),
+      };
+    })
+    .filter((page) => page.text);
 
   return (
     <div className="space-y-6">
-      {summaryText && (
-        <div className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900 p-5">
-          <h2 className="text-sm font-medium mb-2">Summary</h2>
-          <p className="text-sm text-ink-700 leading-relaxed">{summaryText}</p>
-          {summaryPoints.length > 0 && (
-            <ul className="mt-3 list-disc pl-5 text-sm text-ink-700 leading-relaxed space-y-1">
-              {summaryPoints.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}
-            </ul>
-          )}
-          {analysis.model_used && <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">Analyzed with {analysis.model_used}</p>}
-        </div>
-      )}
-
       <div className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900">
-        <div className="px-5 py-3 border-b border-slate-300/70 dark:border-ink-700/60">
-          <h2 className="text-sm font-medium">Extracted fields</h2>
+        <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-300/70 dark:border-ink-700/60">
+          <h2 className="text-sm font-medium">Report details</h2>
+          <button
+            type="button"
+            onClick={() => setIsOriginalOpen((open) => !open)}
+            aria-expanded={isOriginalOpen}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded border border-slate-300 dark:border-ink-700 px-3 py-1.5 text-xs text-ink-700 dark:text-slate-200 hover:bg-paper-dim dark:hover:bg-ink-800"
+          >
+            {isOriginalOpen ? <X size={14} /> : <Eye size={14} />}
+            {isOriginalOpen ? "Close original" : "View original"}
+          </button>
         </div>
-        {analysis.findings.length === 0 && Object.keys(analysis.extracted_fields ?? {}).length === 0 ? (
-          <p className="px-5 py-8 text-sm text-slate-500 dark:text-slate-400 text-center">No fields extracted yet.</p>
+        {isOriginalOpen && <OriginalDocumentViewer document={analysis.document} />}
+        {summaryText && (
+          <p className="px-5 py-4 text-sm leading-6 text-ink-700 dark:text-slate-200 border-b border-slate-300/70 dark:border-ink-700/60">
+            {summaryText}
+          </p>
+        )}
+        {keyPoints.length > 0 && (
+          <ul className="divide-y divide-slate-300/40 dark:divide-ink-700/50">
+            {keyPoints.map((point, index) => (
+              <li key={`${index}-${point}`} className="px-5 py-3 text-sm leading-6 text-ink-700 dark:text-slate-200">
+                {point}
+              </li>
+            ))}
+          </ul>
+        )}
+        {rows.length === 0 ? (
+          <p className="px-5 py-6 text-sm text-slate-500 dark:text-slate-400">
+            {hasExtractedDetails
+              ? "The report details are shown above."
+              : analysis.report_text
+                ? "Key facts were not extracted. Showing the text recognized from your report instead."
+                : "No readable text was extracted from this report. If it is scanned, check OCR setup and re-analyze."}
+          </p>
         ) : (
           <div className="divide-y divide-slate-300/40 dark:divide-ink-700/50">
-            {Object.entries(analysis.extracted_fields ?? {}).length > 0 ? (
-              Object.entries(analysis.extracted_fields ?? {}).map(([key, value]) => (
-                <div key={key} className="flex items-center justify-between gap-4 px-5 py-3">
-                  <div className="min-w-0">
-                    <p className="text-xs text-slate-500 dark:text-slate-400">{formatFieldName(key)}</p>
-                    <p className="text-sm truncate">{String(value)}</p>
-                  </div>
+            {rows.map(([key, value]) => (
+              <article key={key} className="px-5 py-4">
+                <div className="flex items-start justify-between gap-4">
+                  <h3 className="text-sm font-medium text-ink-800 dark:text-paper">
+                    {formatFieldName(key)}
+                  </h3>
+                  <EvidenceButton
+                    evidence={findingByName.get(key)?.evidence ?? null}
+                    onClick={onEvidence}
+                  />
                 </div>
-              ))
-            ) : (
-              analysis.findings.map((f) => (
-                <div key={f.id} className="flex items-center justify-between gap-4 px-5 py-3">
-                  <div className="min-w-0">
-                    <p className="text-xs text-slate-500 dark:text-slate-400">{formatFieldName(f.field_name)}</p>
-                    <p className="text-sm truncate">{f.field_value}</p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-xs text-slate-400 dark:text-slate-500">{Math.round(f.confidence * 100)}%</span>
-                    <EvidenceButton evidence={f.evidence} onClick={onEvidence} />
-                  </div>
-                </div>
-              ))
-            )}
+                <p className="mt-1.5 text-sm leading-6 text-ink-700 dark:text-slate-200 whitespace-pre-wrap break-words">
+                  {formatFindingValue(value)}
+                </p>
+              </article>
+            ))}
+          </div>
+        )}
+        {!hasExtractedDetails && analysis.report_text && (
+          <div className="space-y-4 px-5 pb-5">
+            {reportPages.map(({ pageNumber, text }, index) => (
+              <article
+                key={`${pageNumber ?? "page"}-${index}`}
+                className="rounded border border-slate-200 dark:border-ink-700 bg-paper-dim/40 dark:bg-ink-800/50"
+              >
+                {pageNumber !== null && (
+                  <h3 className="border-b border-slate-200 dark:border-ink-700 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    Page {pageNumber}
+                  </h3>
+                )}
+                <p className="px-4 py-4 text-sm leading-7 text-ink-700 dark:text-slate-200 whitespace-pre-line break-words">
+                  {text}
+                </p>
+              </article>
+            ))}
           </div>
         )}
       </div>
     </div>
   );
+}
+
+function OriginalDocumentViewer({ document }: { document: DocumentAnalysis["document"] }) {
+  const [source, setSource] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    async function loadOriginal() {
+      setError(null);
+      try {
+        const token = window.localStorage.getItem("docai_token");
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/documents/${document.id}/original`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        );
+        if (!response.ok) {
+          throw new Error(response.status === 404
+            ? "The original file could not be found."
+            : "Could not load the original document.");
+        }
+        objectUrl = URL.createObjectURL(await response.blob());
+        if (!cancelled) setSource(objectUrl);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "Could not load the original document.");
+        }
+      }
+    }
+
+    loadOriginal();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [document.id]);
+
+  return (
+    <section className="border-b border-slate-300/70 dark:border-ink-700/60 bg-paper-dim/40 dark:bg-ink-800/40 p-3">
+      <h3 className="mb-2 text-xs font-medium text-slate-600 dark:text-slate-300">{document.filename}</h3>
+      {error ? (
+        <p role="alert" className="rounded border border-brick-600/20 bg-brick-100 px-4 py-3 text-sm text-brick-600">
+          {error}
+        </p>
+      ) : !source ? (
+        <p className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Loading original document…</p>
+      ) : document.mime_type === "application/pdf" ? (
+        <iframe
+          title={`Original document: ${document.filename}`}
+          src={source}
+          className="h-[70vh] min-h-96 w-full rounded border border-slate-300 dark:border-ink-700 bg-white"
+        />
+      ) : (
+        <div className="flex max-h-[70vh] justify-center overflow-auto rounded border border-slate-300 dark:border-ink-700 bg-white p-2">
+          <img src={source} alt={`Original document: ${document.filename}`} className="h-auto max-w-full object-contain" />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function formatFindingValue(value: unknown): string {
+  if (typeof value === "string") {
+    try {
+      return formatFindingValue(JSON.parse(value) as unknown);
+    } catch {
+      return value;
+    }
+  }
+  if (value == null) return "—";
+  if (Array.isArray(value)) {
+    return value.map((item) => `• ${formatFindingValue(item)}`).join("\n");
+  }
+  if (typeof value === "object") {
+    return Object.entries(value).map(([key, item]) =>
+      `${formatFieldName(key)}: ${formatFindingValue(item)}`
+    ).join("\n");
+  }
+  return String(value);
 }
 
 function DeadlinesTab({ analysis, onEvidence }: { analysis: DocumentAnalysis; onEvidence: (e: Evidence) => void }) {
@@ -448,7 +573,9 @@ function ChatTab({ documentId, disabled }: { documentId: number; disabled: boole
             <div
               className={cn(
                 "inline-block rounded px-3.5 py-2 text-sm text-left",
-                m.role === "user" ? "bg-ink-900 text-paper" : "bg-paper-dim text-ink-900 dark:text-paper"
+                m.role === "user"
+                  ? "bg-ink-900 text-paper"
+                  : "bg-paper-dim text-ink-900 dark:bg-ink-800 dark:text-paper"
               )}
             >
               {m.content}
@@ -464,7 +591,7 @@ function ChatTab({ documentId, disabled }: { documentId: number; disabled: boole
           onKeyDown={(e) => e.key === "Enter" && send()}
           disabled={disabled}
           placeholder={disabled ? "Wait for analysis to complete…" : "What is the payment deadline?"}
-          className="flex-1 border border-slate-300 dark:border-ink-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-verdigris-500/40 focus:border-verdigris-500 disabled:bg-paper-dim"
+          className="flex-1 border border-slate-300 dark:border-ink-700 rounded bg-white dark:bg-ink-800 px-3 py-2 text-sm text-ink-900 dark:text-paper placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-verdigris-500/40 focus:border-verdigris-500 disabled:bg-paper-dim dark:disabled:bg-ink-800"
         />
         <button
           onClick={send}

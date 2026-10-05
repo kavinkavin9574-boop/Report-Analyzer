@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 const MODEL_SUGGESTIONS: Record<string, string[]> = {
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o4-mini", "o3"],
   nvidia: ["nvidia/nemotron-3.5-lightning-30b-a3b", "deepseek-ai/deepseek-v4-pro-0813", "moonshotai/kimi-k3"],
+  openrouter: ["openai/gpt-4o-mini", "anthropic/claude-3.7-sonnet", "google/gemini-2.5-flash"],
 };
 
 interface AIModelSettings {
@@ -88,7 +89,11 @@ export default function SettingsPage() {
   }
 
   function selectProvider(provider: string) {
-    const model = provider === "nvidia" ? "nvidia/nemotron-3.5-lightning-30b-a3b" : "gpt-4o-mini";
+    const model = provider === "nvidia"
+      ? "nvidia/nemotron-3.5-lightning-30b-a3b"
+      : provider === "openrouter"
+        ? "openai/gpt-4o-mini"
+        : "gpt-4o-mini";
     setForm((current) => ({
       ...current,
       ai_provider: provider,
@@ -163,11 +168,16 @@ export default function SettingsPage() {
               >
                 <option value="openai">OpenAI</option>
                 <option value="nvidia">NVIDIA</option>
+                <option value="openrouter">OpenRouter</option>
               </select>
             </div>
             <div>
               <label htmlFor="provider-api-key" className="block text-xs text-slate-500 dark:text-slate-400 mb-1.5">
-                {form.ai_provider === "nvidia" ? "NVIDIA API key" : "OpenAI API key"}
+                {form.ai_provider === "nvidia"
+                  ? "NVIDIA API key"
+                  : form.ai_provider === "openrouter"
+                    ? "OpenRouter API key"
+                    : "OpenAI API key"}
               </label>
               <input
                 id="provider-api-key"
@@ -179,7 +189,11 @@ export default function SettingsPage() {
                   const value = event.target.value;
                   setApiKey(value);
                   if (value.startsWith("nvapi-") && form.ai_provider !== "nvidia") selectProvider("nvidia");
-                  if (value.startsWith("sk-") && form.ai_provider !== "openai") selectProvider("openai");
+                  if (value.startsWith("sk-or-v1-") && form.ai_provider !== "openrouter") {
+                    selectProvider("openrouter");
+                  } else if (value.startsWith("sk-") && form.ai_provider !== "openai") {
+                    selectProvider("openai");
+                  }
                 }}
                 className="w-full border border-slate-300 dark:border-ink-700 rounded px-3 py-2 text-sm bg-white dark:bg-ink-900 text-ink-900 dark:text-paper focus:outline-none focus:ring-2 focus:ring-verdigris-500/40 focus:border-verdigris-500"
               />

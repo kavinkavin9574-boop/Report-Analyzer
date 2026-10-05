@@ -4,7 +4,7 @@ import { AuthProvider } from "@/lib/auth-context";
 import { ThemeProvider } from "@/lib/theme-context";
 
 export const metadata: Metadata = {
-  title: "Ledger — Document Intelligence",
+  title: "AI Report Analyzer — Document Intelligence",
   description: "AI-powered analysis for invoices, contracts, and financial reports.",
 };
 

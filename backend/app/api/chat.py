@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -14,6 +16,60 @@ from app.schemas.document import ChatRequest, ChatResponseOut, EvidenceOut
 from app.services.pipeline import _safe_json_loads
 
 router = APIRouter(prefix="/api/documents", tags=["chat"])
+
+
+def _normalize_grounding_text(value: str | None) -> str:
+    if value is None:
+        return ""
+    value = str(value)
+    value = value.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    value = re.sub(r"\s+", " ", value).strip()
+    return value.casefold()
+
+
+def _ground_chat_answer(
+    parsed: dict, page_text_by_number: dict[int, str]
+) -> tuple[str, dict | None]:
+    answer = parsed.get("answer")
+    evidence = parsed.get("evidence")
+    if not isinstance(answer, str) or not answer.strip():
+        return chat_prompts.NOT_FOUND_ANSWER, None
+
+    if answer.strip().casefold() == chat_prompts.NOT_FOUND_ANSWER.casefold():
+        return chat_prompts.NOT_FOUND_ANSWER, None
+
+    if not isinstance(evidence, dict):
+        return chat_prompts.NOT_FOUND_ANSWER, None
+
+    raw_page_number = evidence.get("page")
+    source_text = evidence.get("text")
+    section = evidence.get("section")
+
+    page_number = None
+    if isinstance(raw_page_number, bool):
+        page_number = None
+    elif isinstance(raw_page_number, int):
+        page_number = raw_page_number
+    elif isinstance(raw_page_number, str):
+        normalized_page = raw_page_number.strip()
+        if normalized_page and normalized_page.lstrip("-").isdigit():
+            page_number = int(normalized_page)
+
+    if (
+        page_number is None
+        or not isinstance(source_text, str)
+        or not source_text.strip()
+        or (section is not None and not isinstance(section, str))
+    ):
+        return chat_prompts.NOT_FOUND_ANSWER, None
+
+    page_text = page_text_by_number.get(page_number)
+    normalized_source = _normalize_grounding_text(source_text)
+    normalized_page = _normalize_grounding_text(page_text)
+    if not normalized_page or not normalized_source or normalized_source not in normalized_page:
+        return chat_prompts.NOT_FOUND_ANSWER, None
+
+    return answer.strip(), evidence
 
 
 @router.post("/{document_id}/chat", response_model=ChatResponseOut)
@@ -49,16 +105,18 @@ async def chat_with_document(
     except AIProviderNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     parsed = _safe_json_loads(response.text)
+    if not isinstance(parsed, dict):
+        parsed = {}
 
-    answer = parsed.get("answer") or response.text
+    page_text_by_number = {page.page_number: page.text for page in pages}
+    answer, ev_info = _ground_chat_answer(parsed, page_text_by_number)
     evidence_out = None
-    ev_info = parsed.get("evidence")
-    if ev_info and ev_info.get("text"):
+    if ev_info:
         ev = Evidence(
             document_id=doc.id,
-            page_number=ev_info.get("page", 1),
+            page_number=ev_info["page"],
             section=ev_info.get("section"),
-            source_text=ev_info.get("text", ""),
+            source_text=ev_info["text"],
         )
         db.add(ev)
         db.flush()

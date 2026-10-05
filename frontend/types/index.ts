@@ -8,6 +8,7 @@ export interface User {
 export interface Document {
   id: number;
   filename: string;
+  mime_type: string;
   document_type: string;
   status: string;
   page_count: number;
@@ -90,6 +91,7 @@ export interface DocumentAnalysis {
   document: Document;
   summary: StructuredSummary | string | null;
   extracted_fields: Record<string, string | number | boolean | null>;
+  report_text: string;
   model_used: string | null;
   findings: Finding[];
   deadlines: Deadline[];

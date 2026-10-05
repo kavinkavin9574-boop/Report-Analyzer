@@ -36,14 +36,14 @@ export default function LoginPage() {
       <div className="hidden lg:flex lg:w-1/2 bg-ink-950 dark:bg-ink-900 text-paper flex-col justify-between p-12">
         <div className="flex items-center gap-2">
           <ScrollText size={22} strokeWidth={1.5} />
-          <span className="font-serif text-xl">Ledger</span>
+          <span className="font-serif text-xl">AI Report Analyzer</span>
         </div>
         <div className="max-w-md">
           <p className="font-serif text-3xl leading-snug">
             Every figure your AI reports, traced back to the exact line it came from.
           </p>
           <p className="mt-4 text-sm text-slate-300 dark:text-slate-400 leading-relaxed">
-            Upload invoices, contracts, and financial reports. Ledger extracts the
+            Upload invoices, contracts, and financial reports. AI Report Analyzer extracts the
             numbers, flags what's inconsistent, and shows you the source page for
             every claim it makes.
           </p>
@@ -56,7 +56,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <div className="lg:hidden flex items-center gap-2 mb-8">
             <ScrollText size={20} className="text-verdigris-600" strokeWidth={1.75} />
-            <span className="font-serif text-lg">Ledger</span>
+            <span className="font-serif text-lg">AI Report Analyzer</span>
           </div>
 
           <h1 className="font-serif text-2xl mb-1 text-ink-900 dark:text-paper">

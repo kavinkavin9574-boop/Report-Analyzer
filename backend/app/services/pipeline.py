@@ -12,7 +12,9 @@ immediately while processing continues.
 """
 import json
 import os
+import re
 import time
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.orm import Session
 
@@ -43,6 +45,109 @@ def _safe_json_loads(text: str) -> dict:
         return json.loads(text)
     except Exception:
         return {}
+
+
+def _normalize_extraction(extracted: dict) -> tuple[dict, dict]:
+    """Unwrap value/evidence pairs while keeping evidence available for storage."""
+    values: dict = {}
+    evidence_by_field: dict = {}
+
+    for field_name, field_result in extracted.items():
+        if isinstance(field_result, dict) and "value" in field_result:
+            values[field_name] = field_result["value"]
+            evidence = field_result.get("evidence")
+            if isinstance(evidence, dict):
+                evidence_by_field[field_name] = evidence
+            continue
+
+        if isinstance(field_result, dict) and "evidence" in field_result:
+            values[field_name] = {
+                key: value for key, value in field_result.items() if key != "evidence"
+            }
+            evidence = field_result.get("evidence")
+            if isinstance(evidence, dict):
+                evidence_by_field[field_name] = evidence
+            continue
+
+        values[field_name] = field_result
+
+    return values, evidence_by_field
+
+
+def _parse_numeric_value(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return float(value) if Decimal(str(value)).is_finite() else None
+    if not isinstance(value, str):
+        return None
+
+    text = value.strip()
+    if not text:
+        return None
+
+    is_negative = text.startswith("(") and text.endswith(")")
+    if is_negative:
+        text = text[1:-1].strip()
+
+    # Remove surrounding currency labels/symbols, but reject other text.
+    text = re.sub(r"^[^\d+.,-]+|[^\d.,-]+$", "", text).strip()
+    if not re.fullmatch(r"[+-]?\d[\d.,]*", text):
+        return None
+
+    if "," in text and "." in text:
+        decimal_separator = "," if text.rfind(",") > text.rfind(".") else "."
+        grouping_separator = "." if decimal_separator == "," else ","
+        text = text.replace(grouping_separator, "")
+        if decimal_separator == ",":
+            text = text.replace(",", ".")
+    elif "," in text or "." in text:
+        separator = "," if "," in text else "."
+        parts = text.split(separator)
+        if len(parts) > 2:
+            if all(len(part) == 3 for part in parts[1:]):
+                text = "".join(parts)
+            else:
+                text = "".join(parts[:-1]) + "." + parts[-1]
+        elif len(parts[1]) == 3 and len(parts[0].lstrip("+-")) <= 3:
+            text = "".join(parts)
+        else:
+            text = text.replace(separator, ".")
+
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return None
+    if is_negative:
+        number = -abs(number)
+    return float(number) if number.is_finite() else None
+
+
+def _parse_summary(text: str) -> dict:
+    summary = _safe_json_loads(text)
+    summary_text = summary.get("text")
+    key_points = summary.get("key_points")
+    if (
+        not isinstance(summary_text, str)
+        or not isinstance(key_points, list)
+        or any(not isinstance(point, str) for point in key_points)
+    ):
+        raise ValueError("AI summary response must contain text and a list of key_points")
+    return {"text": summary_text, "key_points": key_points}
+
+
+def _summary_from_extraction(extracted: dict) -> dict:
+    key_points = []
+    for field_name, value in extracted.items():
+        if value in (None, "", [], {}):
+            continue
+        display_value = (
+            json.dumps(value, ensure_ascii=False)
+            if isinstance(value, (dict, list))
+            else str(value)
+        )
+        key_points.append(f"{field_name.replace('_', ' ').strip().title()}: {display_value}")
+    return {"text": "", "key_points": key_points}
 
 
 def _log_model_use(db: Session, document_id: int, task: str, response, started_at: float):
@@ -137,7 +242,9 @@ async def process_document(db: Session, document: Document) -> None:
         )
         _raise_if_cancelled(db, document.id)
         _log_model_use(db, document.id, "extraction", extraction_resp, started)
-        extracted = _safe_json_loads(extraction_resp.text)
+        extracted, extraction_evidence = _normalize_extraction(
+            _safe_json_loads(extraction_resp.text)
+        )
 
         # Validate extraction shape for invoices with Pydantic (extend per type as needed)
         if doc_type == "invoice":
@@ -151,18 +258,28 @@ async def process_document(db: Session, document: Document) -> None:
             if field_value in (None, "", [], {}):
                 continue
             evidence_obj = None
-            ev_info = None
-            if isinstance(field_value, dict):
+            ev_info = extraction_evidence.get(field_name)
+            if ev_info is None and isinstance(field_value, dict):
                 ev_info = field_value.get("evidence")
             if ev_info:
                 evidence_obj = _create_evidence(
                     db, document.id, ev_info.get("page", 1), None, ev_info.get("text", "")
                 )
+            display_value = (
+                {key: value for key, value in field_value.items() if key != "evidence"}
+                if isinstance(field_value, dict) and "evidence" in field_value
+                else field_value
+            )
+            stored_value = (
+                json.dumps(display_value, ensure_ascii=False)
+                if isinstance(display_value, (dict, list))
+                else str(display_value)
+            )
             db.add(Finding(
                 document_id=document.id,
                 category="extraction",
                 field_name=field_name,
-                field_value=str(field_value)[:2000],
+                field_value=stored_value[:2000],
                 confidence=0.8,
                 evidence_id=evidence_obj.id if evidence_obj else None,
                 source="ai",
@@ -176,20 +293,24 @@ async def process_document(db: Session, document: Document) -> None:
 
         rule_anomalies: list[dict] = []
         if doc_type == "invoice":
+            amounts = {
+                field: _parse_numeric_value(extracted.get(field))
+                for field in ("subtotal", "tax", "discount", "total")
+            }
             check = financial_validation.validate_invoice_totals(
-                subtotal=extracted.get("subtotal"),
-                tax=extracted.get("tax"),
-                discount=extracted.get("discount"),
+                subtotal=amounts["subtotal"],
+                tax=amounts["tax"],
+                discount=amounts["discount"],
                 shipping=None,
-                stated_total=extracted.get("total"),
+                stated_total=amounts["total"],
             )
             rule_anomalies.extend(check.anomalies)
 
             for label, is_calc, value in [
-                ("subtotal", False, extracted.get("subtotal")),
-                ("tax", False, extracted.get("tax")),
-                ("discount", False, extracted.get("discount")),
-                ("stated_total", False, extracted.get("total")),
+                ("subtotal", False, amounts["subtotal"]),
+                ("tax", False, amounts["tax"]),
+                ("discount", False, amounts["discount"]),
+                ("stated_total", False, amounts["total"]),
                 ("calculated_total", True, check.expected_total),
             ]:
                 if value is not None:
@@ -199,7 +320,15 @@ async def process_document(db: Session, document: Document) -> None:
                     ))
 
             rule_anomalies.extend(
-                financial_validation.detect_line_item_issues(extracted.get("line_items") or [])
+                financial_validation.detect_line_item_issues([
+                    {
+                        **item,
+                        "quantity": _parse_numeric_value(item.get("quantity")),
+                        "unit_price": _parse_numeric_value(item.get("unit_price")),
+                    }
+                    for item in (extracted.get("line_items") or [])
+                    if isinstance(item, dict)
+                ])
             )
 
         for a in rule_anomalies:
@@ -248,19 +377,30 @@ async def process_document(db: Session, document: Document) -> None:
             db.add(MissingData(document_id=document.id, field_name=m["field_name"], description=m["description"]))
         db.commit()
 
-        # --- 7. Summarization ---
+        # --- 7. Extract readable key facts from the report ---
         _raise_if_cancelled(db, document.id)
         started = time.time()
         summary_resp = await ai_router.run_task(
             "summarization",
             summarization_prompts.SYSTEM_PROMPT,
             summarization_prompts.build_user_prompt(full_text, doc_type),
-            json_mode=False,
         )
         _raise_if_cancelled(db, document.id)
         _log_model_use(db, document.id, "summarization", summary_resp, started)
+        try:
+            summary = _parse_summary(summary_resp.text)
+        except ValueError as exc:
+            print(
+                f"[pipeline] document {document.id} summary response was invalid; "
+                f"using extracted report facts instead: {exc}"
+            )
+            summary = _summary_from_extraction(extracted)
 
-        db.add(Analysis(document_id=document.id, summary=summary_resp.text, model_used=summary_resp.model))
+        db.add(Analysis(
+            document_id=document.id,
+            summary=json.dumps(summary, ensure_ascii=False),
+            model_used=summary_resp.model,
+        ))
 
         document.status = "completed"
         db.commit()

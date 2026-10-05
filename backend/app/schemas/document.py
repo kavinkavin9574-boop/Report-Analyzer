@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 class DocumentOut(BaseModel):
     id: int
     filename: str
+    mime_type: str
     document_type: str
     status: str
     page_count: int
@@ -114,6 +115,7 @@ class DocumentAnalysisOut(BaseModel):
     document: DocumentOut
     summary: Optional[StructuredSummary | str] = None
     extracted_fields: dict[str, Any] = {}
+    report_text: str = ""
     model_used: Optional[str] = None
     findings: list[FindingOut] = []
     deadlines: list[DeadlineOut] = []
@@ -152,7 +154,7 @@ class AIModelSettingsOut(BaseModel):
 
 
 class AIModelSettingsIn(BaseModel):
-    ai_provider: Optional[str] = None       # "openai" or "nvidia"
+    ai_provider: Optional[str] = None       # "openai", "nvidia", or "openrouter"
     default_model: Optional[str] = None
     fast_model: Optional[str] = None
     reasoning_model: Optional[str] = None

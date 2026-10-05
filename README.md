@@ -1,4 +1,4 @@
-# Ledger — Intelligent Business Document Analysis
+# AI Report Analyzer — Intelligent Business Document Analysis
 
 AI-powered analysis for invoices, contracts, financial reports, and compliance
 documents. Every extracted figure, deadline, and anomaly is traceable back to
@@ -36,14 +36,13 @@ validated with Pydantic) → deterministic financial validation (plain Python)
 mapping → summarize → done.
 
 **AI provider abstraction:** all AI calls go through `AIProvider`
-(`app/ai/providers/base.py`). `OpenAIProvider` talks to OpenAI and does all
-real analysis — extraction, classification, anomaly detection, chat, and
-summarization all hit the live API. A new provider (Anthropic, Google, a
-local model) can be added without touching any business logic — just
-implement `AIProvider` and register it in `app/ai/router.py`. Without
-`OPENAI_API_KEY` set, document analysis fails fast with a clear error
-(surfaced on the document as `status: failed`) rather than silently
-faking a result.
+(`app/ai/providers/base.py`). OpenAI, NVIDIA, and OpenRouter are supported
+through the OpenAI-compatible chat completions API. Choose a provider, enter
+its API key, and configure model names in Settings → AI model. The key stays
+in backend memory and is never stored in the database or returned to the
+browser. Without a key configured for the selected provider, document
+analysis fails fast with a clear error (surfaced on the document as
+`status: failed`) rather than silently faking a result.
 
 Model *names* are never hard-coded — only task → tier routing
 (`classification`/`extraction`/`reasoning`/... → `fast`/`primary`/
@@ -76,8 +75,8 @@ icons.
 **Backend:** Python, FastAPI, Pydantic, SQLAlchemy, PostgreSQL.
 **Document processing:** PyMuPDF (text + page rendering), PaddleOCR
 ([github.com/PaddlePaddle/PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)), Pillow.
-**AI:** OpenAI API via a provider abstraction (see above). A valid
-`OPENAI_API_KEY` is required for document analysis.
+**AI:** OpenAI-compatible APIs from OpenAI, NVIDIA, and OpenRouter via a
+provider abstraction (see above).
 
 ## 5. Installation
 
@@ -98,7 +97,7 @@ icons.
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp ../.env.example ../.env   # edit values
+cp ../.env.example ../.env   # edit values; add the provider key in Settings
 uvicorn app.main:app --reload
 ```
 
@@ -124,7 +123,6 @@ See `.env.example` at the repo root for the backend, and
 
 ```env
 AI_PROVIDER=openai
-OPENAI_API_KEY=                # required — document analysis fails without it
 OPENAI_DEFAULT_MODEL=gpt-4o
 OPENAI_FAST_MODEL=gpt-4o-mini
 OPENAI_REASONING_MODEL=gpt-4o
@@ -135,6 +133,9 @@ JWT_SECRET=change-me-in-production
 STORAGE_PATH=./storage
 MAX_FILE_SIZE=26214400
 ```
+
+Choose OpenAI, NVIDIA, or OpenRouter and enter its API key from Settings →
+AI model. The configured model names are sent to the selected provider.
 
 ## 7. Database setup
 
@@ -185,8 +186,8 @@ and prompts but have less test coverage.
 - File type and size are validated server-side on upload.
 - Unhandled exceptions are caught globally and never leak stack traces to
   the client; full details are logged server-side.
-- API keys are read from environment variables only and are never sent to
-  the frontend.
+- Provider API keys entered in Settings are held in backend memory only;
+  they are never stored in the database or returned to the frontend.
 - Basic rate limiting via `slowapi` (120 req/min per IP by default).
 - `PUT /api/settings/ai-models` (provider/model choice) is currently open to
   any authenticated user, not gated to admins — fine for a single-tenant

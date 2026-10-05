@@ -41,7 +41,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="px-6 py-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <ScrollText size={20} className="text-verdigris-600 dark:text-verdigris-500" strokeWidth={1.75} />
-            <span className="font-serif text-lg tracking-tight">Ledger</span>
+            <span className="font-serif text-sm tracking-tight">AI Report Analyzer</span>
           </div>
           <ThemeToggle className="text-slate-400 hover:text-ink-700 dark:hover:text-paper transition-colors" />
         </div>
@@ -82,7 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="md:hidden sticky top-0 z-20 flex items-center justify-between px-4 py-3 bg-paper dark:bg-ink-950 border-b border-slate-300/60 dark:border-ink-700/60">
         <div className="flex items-center gap-2">
           <ScrollText size={18} className="text-verdigris-600 dark:text-verdigris-500" strokeWidth={1.75} />
-          <span className="font-serif text-base">Ledger</span>
+          <span className="font-serif text-sm">AI Report Analyzer</span>
         </div>
         <div className="flex items-center gap-3">
           <ThemeToggle className="text-slate-500 dark:text-slate-400" />
