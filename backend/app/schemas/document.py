@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Any, Optional
-from pydantic import BaseModel, ConfigDict, SecretStr
+from typing import Any, Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class DocumentOut(BaseModel):
@@ -104,9 +104,23 @@ class MissingDataOut(BaseModel):
         from_attributes = True
 
 
+class SummaryItem(BaseModel):
+    label: str
+    value: str
+    source_type: Literal["direct", "inference", "not_supported"]
+    source_location: str = ""
+    evidence: str = ""
+
+
+class SummarySection(BaseModel):
+    heading: str
+    items: list[SummaryItem] = Field(default_factory=list)
+
+
 class StructuredSummary(BaseModel):
-    text: str
-    key_points: list[str] = []
+    text: str = ""
+    key_points: list[str] = Field(default_factory=list)
+    sections: list[SummarySection] = Field(default_factory=list)
 
 
 class DocumentAnalysisOut(BaseModel):

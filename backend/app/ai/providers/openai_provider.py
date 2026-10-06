@@ -39,6 +39,7 @@ class OpenAIProvider(AIProvider):
         model_tier: str,
         json_mode: bool = False,
         temperature: float = 0.2,
+        max_tokens: int = 1950,
     ) -> AIResponse:
         model = self._tier_to_model.get(model_tier, settings.openai_default_model)
 
@@ -49,7 +50,7 @@ class OpenAIProvider(AIProvider):
         response = await self._client.chat.completions.create(
             model=model,
             temperature=temperature,
-            max_tokens=1950,
+            max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

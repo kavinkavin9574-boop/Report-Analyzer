@@ -7,11 +7,14 @@ from openai import APIConnectionError
 _TASK_TO_TIER = {
     "classification": "fast",
     "ocr_cleanup": "fast",
-    "extraction": "primary",
+    "extraction": "reasoning",
     "reasoning": "reasoning",
     "anomaly_explanation": "reasoning",
-    "summarization": "primary",
-    "chat": "primary",
+    "summarization": "fast",
+    "chat": "fast",
+}
+_TASK_MAX_TOKENS = {
+    "summarization": 4096,
 }
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -79,6 +82,7 @@ async def run_task(task: str, system_prompt: str, user_prompt: str, json_mode: b
             user_prompt=user_prompt,
             model_tier=tier,
             json_mode=json_mode,
+            max_tokens=_TASK_MAX_TOKENS.get(task, 1950),
         )
     except APIConnectionError as exc:
         cause = exc.__cause__ or exc.__context__

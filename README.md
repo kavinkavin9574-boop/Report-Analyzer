@@ -20,6 +20,9 @@ PNG, or JPG — including scanned pages) and the system will:
 - Let you click any finding and jump straight to the source page, with the
   supporting text shown alongside it
 - Answer questions about a document, grounded only in its own content
+- Produce a source-grounded report covering overview, dates/deadlines,
+  obligations, financial details, anomalies, evidence locations, and a final
+  summary. Missing facts are explicitly marked instead of inferred.
 
 ## 2. Architecture
 

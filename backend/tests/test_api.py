@@ -12,6 +12,7 @@ from openai import APIConnectionError
 from fastapi.testclient import TestClient
 
 from app.ai import router as ai_router
+from app.ai.providers.base import AIResponse
 from app.ai.providers import openai_provider
 from app.api.chat import _ground_chat_answer
 from app.main import app
@@ -27,6 +28,8 @@ from app.services.pipeline import (
     _parse_numeric_value,
     _parse_summary,
     _summary_from_extraction,
+    _verify_summary_sources,
+    _run_document_analysis_tasks,
     process_document,
 )
 
@@ -52,6 +55,25 @@ def test_ocr_runtime_disables_problematic_paddle_flags():
     assert os.environ.get("FLAGS_enable_pir_api") == "0"
     assert os.environ.get("FLAGS_use_onednn") == "0"
     assert os.environ.get("FLAGS_use_mkldnn") == "0"
+
+
+def test_document_analysis_ai_tasks_run_concurrently(monkeypatch):
+    started_tasks = []
+    all_started = asyncio.Event()
+
+    async def fake_run_task(task, system_prompt, user_prompt):
+        started_tasks.append(task)
+        if len(started_tasks) == 3:
+            all_started.set()
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        return AIResponse(text="{}", model="test-model")
+
+    monkeypatch.setattr(ai_router, "run_task", fake_run_task)
+    results = asyncio.run(_run_document_analysis_tasks("invoice", "invoice text"))
+
+    assert set(started_tasks) == {"extraction", "anomaly_explanation", "summarization"}
+    assert len(results) == 3
+    assert all(response.model == "test-model" for response, _ in results)
 
 
 def test_health_check(client):
@@ -153,12 +175,78 @@ def test_parse_summary_returns_report_key_points():
     assert parsed == {
         "text": "",
         "key_points": ["Revenue: $1,250.50", "Reporting period: Q1 2026"],
+        "sections": [],
     }
 
 
-def test_parse_summary_rejects_missing_key_points():
-    with pytest.raises(ValueError, match="key_points"):
-        _parse_summary('{"text":"Report summary"}')
+def test_parse_summary_accepts_text_without_key_points():
+    assert _parse_summary('{"text":"Report summary"}') == {
+        "text": "Report summary",
+        "key_points": [],
+        "sections": [],
+    }
+
+
+def test_parse_summary_accepts_fenced_json_with_leading_or_trailing_text():
+    parsed = _parse_summary('Report:\n```json\n{"text":"Report summary"}\n```\nDone.')
+
+    assert parsed == {"text": "Report summary", "key_points": [], "sections": []}
+
+
+def test_parse_summary_rejects_invalid_key_points():
+    with pytest.raises(ValueError, match="list of string 'key_points'"):
+        _parse_summary('{"text":"Report summary","key_points":"Revenue: 100"}')
+
+
+def test_parse_summary_preserves_evidence_cited_sections():
+    parsed = _parse_summary(
+        '{"text":"Payment confirmation.","sections":[{"heading":"2. Deadlines",'
+        '"items":[{"label":"Payment date","value":"2026-10-05",'
+        '"source_type":"direct","source_location":"Page 1, Transaction details",'
+        '"evidence":"Payment date: 2026-10-05"}]}]}'
+    )
+
+    assert parsed["sections"][0]["heading"] == "2. Deadlines"
+    assert parsed["sections"][0]["items"][0]["evidence"] == "Payment date: 2026-10-05"
+
+
+def test_parse_summary_rejects_invalid_source_type():
+    with pytest.raises(ValueError, match="expected report shape"):
+        _parse_summary(
+            '{"text":"Summary","sections":[{"heading":"1. Overview","items":['
+            '{"label":"Status","value":"Paid","source_type":"guessed"}]}]}'
+        )
+
+
+def test_summary_evidence_must_match_the_cited_page_text():
+    summary = {
+        "sections": [{
+            "heading": "1. Overview",
+            "items": [
+                {
+                    "label": "Course",
+                    "value": "AI Course",
+                    "source_type": "direct",
+                    "source_location": "Page 1, heading Course",
+                    "evidence": "Course: AI Course",
+                },
+                {
+                    "label": "Organization",
+                    "value": "Example Org",
+                    "source_type": "direct",
+                    "source_location": "Page 2, heading Organization",
+                    "evidence": "Course: AI Course",
+                },
+            ],
+        }],
+    }
+
+    verified = _verify_summary_sources(summary, "[PAGE 1]\nCourse: AI Course\n[PAGE 2]\nStatus: Paid")
+
+    assert verified["sections"][0]["items"][0]["source_type"] == "direct"
+    assert verified["sections"][0]["items"][1]["source_type"] == "not_supported"
+    assert verified["sections"][0]["items"][1]["value"] == "Cannot be determined from this document."
+    assert verified["sections"][0]["items"][1]["evidence"] == ""
 
 
 def test_summary_fallback_uses_extracted_report_facts():
@@ -176,6 +264,7 @@ def test_summary_fallback_uses_extracted_report_facts():
             "Revenue: 1250.5",
             'Financial Ratios: [{"name": "margin", "value": 0.25}]',
         ],
+        "sections": [],
     }
 
 
@@ -250,6 +339,28 @@ def test_ai_connection_error_includes_provider_task_and_root_cause(monkeypatch):
     assert "OpenAI (api.openai.com)" in str(exc_info.value)
     assert "'classification'" in str(exc_info.value)
     assert "OSError: network unreachable" in str(exc_info.value)
+
+
+def test_document_ai_tasks_use_quality_appropriate_model_tiers():
+    assert ai_router._TASK_TO_TIER["extraction"] == "reasoning"
+    assert ai_router._TASK_TO_TIER["anomaly_explanation"] == "reasoning"
+    assert ai_router._TASK_TO_TIER["summarization"] == "fast"
+    assert ai_router._TASK_TO_TIER["chat"] == "fast"
+
+
+def test_summarization_task_has_larger_output_budget(monkeypatch):
+    captured = {}
+
+    class CapturingProvider:
+        async def complete(self, **kwargs):
+            captured.update(kwargs)
+            return AIResponse(text='{"text":"Summary"}', model="test-model")
+
+    monkeypatch.setattr(ai_router, "get_provider", lambda: CapturingProvider())
+
+    asyncio.run(ai_router.run_task("summarization", "system", "user"))
+
+    assert captured["max_tokens"] == 4096
 
 
 def test_openai_provider_retries_transient_connection_errors(monkeypatch):

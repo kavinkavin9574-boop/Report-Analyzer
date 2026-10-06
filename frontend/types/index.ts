@@ -85,6 +85,20 @@ export interface MissingData {
 export interface StructuredSummary {
   text: string;
   key_points: string[];
+  sections: SummarySection[];
+}
+
+export interface SummaryItem {
+  label: string;
+  value: string;
+  source_type: "direct" | "inference" | "not_supported";
+  source_location: string;
+  evidence: string;
+}
+
+export interface SummarySection {
+  heading: string;
+  items: SummaryItem[];
 }
 
 export interface DocumentAnalysis {

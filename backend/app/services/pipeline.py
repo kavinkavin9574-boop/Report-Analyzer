@@ -2,23 +2,26 @@
 Orchestrates the full pipeline described in the product spec:
 
 Upload -> validation -> storage -> type detection -> text extraction -> OCR
--> segmentation -> normalization -> classification -> extraction ->
-rule-based validation -> anomaly detection -> missing-data detection ->
-evidence mapping -> confidence scoring -> DB storage.
+-> classification -> concurrent extraction, anomaly detection, and summary
+-> rule-based validation -> missing-data detection -> evidence mapping ->
+DB storage.
 
 Runs synchronously here for clarity; wire this into a background task queue
 (e.g. FastAPI BackgroundTasks or Celery/RQ) for production so uploads return
 immediately while processing continues.
 """
+import asyncio
 import json
 import os
 import re
 import time
 from decimal import Decimal, InvalidOperation
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.ai import router as ai_router
+from app.ai.providers.base import AIResponse
 from app.ai.prompts import classification as classification_prompts
 from app.ai.prompts import extraction as extraction_prompts
 from app.ai.prompts import anomaly as anomaly_prompts
@@ -30,21 +33,29 @@ from app.models.document import Document, DocumentPage
 from app.models.analysis import (
     Analysis, Evidence, Finding, FinancialValue, Anomaly, MissingData, AIModelLog,
 )
+from app.schemas.document import StructuredSummary
 from app.rules import financial_validation, missing_data as missing_data_rules
 
 settings = get_settings()
+TimedAIResult = tuple[AIResponse, float]
 
 
 def _safe_json_loads(text: str) -> dict:
     text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
+    fenced_json = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.IGNORECASE | re.DOTALL)
+    if fenced_json:
+        text = fenced_json.group(1).strip()
     try:
-        return json.loads(text)
-    except Exception:
-        return {}
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        object_start = text.find("{")
+        if object_start < 0:
+            return {}
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(text, object_start)
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _normalize_extraction(extracted: dict) -> tuple[dict, dict]:
@@ -125,15 +136,60 @@ def _parse_numeric_value(value: object) -> float | None:
 
 def _parse_summary(text: str) -> dict:
     summary = _safe_json_loads(text)
-    summary_text = summary.get("text")
-    key_points = summary.get("key_points")
+    if not isinstance(summary, dict) or not summary:
+        reason = "empty" if not text.strip() else "not a valid JSON object"
+        raise ValueError(f"AI summary response was {reason}")
+
+    summary_text = summary.get("text", "")
+    key_points = summary.get("key_points", [])
     if (
         not isinstance(summary_text, str)
         or not isinstance(key_points, list)
         or any(not isinstance(point, str) for point in key_points)
     ):
-        raise ValueError("AI summary response must contain text and a list of key_points")
-    return {"text": summary_text, "key_points": key_points}
+        raise ValueError(
+            "AI summary response fields must be a string 'text' and a list of string 'key_points'"
+        )
+
+    try:
+        return StructuredSummary.model_validate(summary).model_dump()
+    except ValidationError as exc:
+        raise ValueError(f"AI summary response did not match the expected report shape: {exc}") from exc
+
+
+def _verify_summary_sources(summary: dict, document_text: str) -> dict:
+    page_matches = list(re.finditer(r"(?m)^\[PAGE\s+(\d+)\]\s*$", document_text))
+    page_text: dict[int, str] = {}
+    for index, match in enumerate(page_matches):
+        end = page_matches[index + 1].start() if index + 1 < len(page_matches) else len(document_text)
+        page_text[int(match.group(1))] = document_text[match.end():end]
+
+    def normalize_whitespace(value: str) -> str:
+        return " ".join(value.split())
+
+    full_text = normalize_whitespace(document_text)
+    for section in summary.get("sections", []):
+        for item in section.get("items", []):
+            if item["source_type"] == "not_supported":
+                item["evidence"] = ""
+                continue
+
+            evidence = normalize_whitespace(item["evidence"])
+            page_match = re.search(r"\bpage\s+(\d+)\b", item["source_location"], re.IGNORECASE)
+            source_text = (
+                normalize_whitespace(page_text.get(int(page_match.group(1)), ""))
+                if page_match
+                else full_text
+            )
+            if evidence and evidence in source_text:
+                continue
+
+            item["source_type"] = "not_supported"
+            item["value"] = "Cannot be determined from this document."
+            item["source_location"] = "The cited evidence could not be verified against the document text."
+            item["evidence"] = ""
+
+    return summary
 
 
 def _summary_from_extraction(extracted: dict) -> dict:
@@ -147,7 +203,7 @@ def _summary_from_extraction(extracted: dict) -> dict:
             else str(value)
         )
         key_points.append(f"{field_name.replace('_', ' ').strip().title()}: {display_value}")
-    return {"text": "", "key_points": key_points}
+    return {"text": "", "key_points": key_points, "sections": []}
 
 
 def _log_model_use(db: Session, document_id: int, task: str, response, started_at: float):
@@ -160,6 +216,34 @@ def _log_model_use(db: Session, document_id: int, task: str, response, started_a
         estimated_cost=0.0,  # wire up real per-model pricing table here
         processing_time_ms=int((time.time() - started_at) * 1000),
     ))
+
+
+async def _run_timed_ai_task(task: str, system_prompt: str, user_prompt: str) -> TimedAIResult:
+    started_at = time.time()
+    response = await ai_router.run_task(task, system_prompt, user_prompt)
+    return response, started_at
+
+
+async def _run_document_analysis_tasks(
+    doc_type: str, full_text: str
+) -> tuple[TimedAIResult, TimedAIResult, TimedAIResult]:
+    return await asyncio.gather(
+        _run_timed_ai_task(
+            "extraction",
+            extraction_prompts.get_system_prompt(doc_type),
+            extraction_prompts.build_user_prompt(full_text),
+        ),
+        _run_timed_ai_task(
+            "anomaly_explanation",
+            anomaly_prompts.SYSTEM_PROMPT,
+            anomaly_prompts.build_user_prompt(full_text),
+        ),
+        _run_timed_ai_task(
+            "summarization",
+            summarization_prompts.SYSTEM_PROMPT,
+            summarization_prompts.build_user_prompt(full_text, doc_type),
+        ),
+    )
 
 
 def _create_evidence(db: Session, document_id: int, page: int, section: str | None, text: str) -> Evidence:
@@ -232,16 +316,20 @@ async def process_document(db: Session, document: Document) -> None:
 
         doc_type = document.document_type
 
-        # --- 3. Extraction ---
+        # --- 3. Independent AI analysis ---
+        # Classification determines the extraction prompt; after that, the
+        # extraction, anomaly review, and summary can run concurrently.
         _raise_if_cancelled(db, document.id)
-        started = time.time()
-        extraction_resp = await ai_router.run_task(
-            "extraction",
-            extraction_prompts.get_system_prompt(doc_type),
-            extraction_prompts.build_user_prompt(full_text),
+        extraction_result, anomaly_result, summary_result = await _run_document_analysis_tasks(
+            doc_type, full_text
         )
         _raise_if_cancelled(db, document.id)
-        _log_model_use(db, document.id, "extraction", extraction_resp, started)
+        extraction_resp, extraction_started = extraction_result
+        anomaly_resp, anomaly_started = anomaly_result
+        summary_resp, summary_started = summary_result
+        _log_model_use(db, document.id, "extraction", extraction_resp, extraction_started)
+        _log_model_use(db, document.id, "anomaly_explanation", anomaly_resp, anomaly_started)
+        _log_model_use(db, document.id, "summarization", summary_resp, summary_started)
         extracted, extraction_evidence = _normalize_extraction(
             _safe_json_loads(extraction_resp.text)
         )
@@ -345,14 +433,6 @@ async def process_document(db: Session, document: Document) -> None:
 
         # --- 5. AI-based semantic anomaly detection ---
         _raise_if_cancelled(db, document.id)
-        started = time.time()
-        anomaly_resp = await ai_router.run_task(
-            "anomaly_explanation",
-            anomaly_prompts.SYSTEM_PROMPT,
-            anomaly_prompts.build_user_prompt(full_text),
-        )
-        _raise_if_cancelled(db, document.id)
-        _log_model_use(db, document.id, "anomaly_explanation", anomaly_resp, started)
         try:
             ai_anomalies = AnomalyList(**_safe_json_loads(anomaly_resp.text)).anomalies
         except Exception:
@@ -379,20 +459,17 @@ async def process_document(db: Session, document: Document) -> None:
 
         # --- 7. Extract readable key facts from the report ---
         _raise_if_cancelled(db, document.id)
-        started = time.time()
-        summary_resp = await ai_router.run_task(
-            "summarization",
-            summarization_prompts.SYSTEM_PROMPT,
-            summarization_prompts.build_user_prompt(full_text, doc_type),
-        )
-        _raise_if_cancelled(db, document.id)
-        _log_model_use(db, document.id, "summarization", summary_resp, started)
         try:
-            summary = _parse_summary(summary_resp.text)
+            summary = _verify_summary_sources(
+                _parse_summary(summary_resp.text), full_text
+            )
         except ValueError as exc:
+            choices = getattr(summary_resp.raw, "choices", None)
+            finish_reason = getattr(choices[0], "finish_reason", None) if choices else None
             print(
                 f"[pipeline] document {document.id} summary response was invalid; "
-                f"using extracted report facts instead: {exc}"
+                f"using extracted report facts instead: {exc}; "
+                f"response_chars={len(summary_resp.text)}; finish_reason={finish_reason or 'unknown'}"
             )
             summary = _summary_from_extraction(extracted)
 

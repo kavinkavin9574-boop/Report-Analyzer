@@ -30,6 +30,7 @@ class AIProvider(ABC):
         model_tier: str,
         json_mode: bool = False,
         temperature: float = 0.2,
+        max_tokens: int = 1950,
     ) -> AIResponse:
         """Run a single completion. `model_tier` is one of: fast | primary | reasoning."""
         raise NotImplementedError

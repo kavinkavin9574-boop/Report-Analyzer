@@ -11,7 +11,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { PageImage } from "@/components/page-image";
 import { useRequireAuth } from "@/lib/use-require-auth";
 import { api } from "@/lib/api";
-import type { DocumentAnalysis, Evidence } from "@/types";
+import type { DocumentAnalysis, Evidence, SummarySection } from "@/types";
 import { cn, documentTypeLabel, formatFieldName, severityColor } from "@/lib/utils";
 
 type TabKey = "overview" | "deadlines" | "obligations" | "financial" | "anomalies" | "missing" | "chat";
@@ -147,7 +147,7 @@ export default function DocumentDetailPage() {
           <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse" />
           {document.status === "extracting_text" && "Extracting text from the document…"}
           {document.status === "processing" && "Preparing document…"}
-          {document.status === "analyzing" && "Running AI analysis…"}
+          {document.status === "analyzing" && "Reviewing document details and cross-checking findings…"}
           {document.status === "validating" && "Validating findings…"}
           {document.status === "uploaded" && "Queued for processing…"}
         </div>
@@ -242,11 +242,13 @@ function OverviewTab({
   analysis, onEvidence,
 }: { analysis: DocumentAnalysis; onEvidence: (e: Evidence) => void }) {
   const findingByName = new Map(analysis.findings.map((finding) => [finding.field_name, finding]));
-  const rows = Object.entries(analysis.extracted_fields ?? {});
   const summary = analysis.summary;
   const summaryText = typeof summary === "string" ? summary.trim() : summary?.text.trim();
-  const keyPoints = typeof summary === "string" ? [] : summary?.key_points ?? [];
-  const hasExtractedDetails = summaryText || keyPoints.length > 0 || rows.length > 0;
+  const overviewSection = findReportSection(analysis, "Overview");
+  const hasStructuredReport = typeof summary !== "string" && (summary?.sections.length ?? 0) > 0;
+  const keyPoints = typeof summary === "string" || hasStructuredReport ? [] : summary?.key_points ?? [];
+  const rows = hasStructuredReport ? [] : Object.entries(analysis.extracted_fields ?? {});
+  const hasExtractedDetails = summaryText || keyPoints.length > 0 || (overviewSection?.items.length ?? 0) > 0 || rows.length > 0;
   const [isOriginalOpen, setIsOriginalOpen] = useState(false);
   const reportPages = analysis.report_text
     .split(/(?=\[PAGE \d+\]\n)/)
@@ -289,6 +291,7 @@ function OverviewTab({
             ))}
           </ul>
         )}
+        {overviewSection && <StructuredReportSection section={overviewSection} />}
         {rows.length === 0 ? (
           <p className="px-5 py-6 text-sm text-slate-500 dark:text-slate-400">
             {hasExtractedDetails
@@ -423,6 +426,8 @@ function formatFindingValue(value: unknown): string {
 }
 
 function DeadlinesTab({ analysis, onEvidence }: { analysis: DocumentAnalysis; onEvidence: (e: Evidence) => void }) {
+  const reportSection = findReportSection(analysis, "Deadlines");
+  if (reportSection) return <StructuredReportSection section={reportSection} />;
   if (analysis.deadlines.length === 0) return <EmptyState label="No deadlines detected in this document." />;
   return (
     <div className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900 divide-y divide-slate-300/40 dark:divide-ink-700/50">
@@ -440,6 +445,8 @@ function DeadlinesTab({ analysis, onEvidence }: { analysis: DocumentAnalysis; on
 }
 
 function ObligationsTab({ analysis, onEvidence }: { analysis: DocumentAnalysis; onEvidence: (e: Evidence) => void }) {
+  const reportSection = findReportSection(analysis, "Obligations / Action Items");
+  if (reportSection) return <StructuredReportSection section={reportSection} />;
   if (analysis.obligations.length === 0) return <EmptyState label="No obligations detected in this document." />;
   return (
     <div className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900 divide-y divide-slate-300/40 dark:divide-ink-700/50">
@@ -461,6 +468,8 @@ function ObligationsTab({ analysis, onEvidence }: { analysis: DocumentAnalysis; 
 }
 
 function FinancialTab({ analysis, onEvidence }: { analysis: DocumentAnalysis; onEvidence: (e: Evidence) => void }) {
+  const reportSection = findReportSection(analysis, "Financial Information");
+  if (reportSection) return <StructuredReportSection section={reportSection} table />;
   if (analysis.financial_values.length === 0) return <EmptyState label="No financial values extracted." />;
   return (
     <div className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900 divide-y divide-slate-300/40 dark:divide-ink-700/50">
@@ -483,7 +492,25 @@ function FinancialTab({ analysis, onEvidence }: { analysis: DocumentAnalysis; on
 }
 
 function AnomaliesTab({ analysis }: { analysis: DocumentAnalysis }) {
-  if (analysis.anomalies.length === 0) {
+  const reportSection = findReportSection(analysis, "Anomalies / Inconsistencies / Missing Information");
+  if (reportSection) {
+    return (
+      <div className="space-y-4">
+        <StructuredReportSection section={reportSection} />
+        {analysis.anomalies.length > 0 && (
+          <section>
+            <h3 className="mb-2 text-sm font-semibold text-ink-800 dark:text-paper">Detected checks</h3>
+            <AnomalyFindings anomalies={analysis.anomalies} />
+          </section>
+        )}
+      </div>
+    );
+  }
+  return <AnomalyFindings anomalies={analysis.anomalies} />;
+}
+
+function AnomalyFindings({ anomalies }: { anomalies: DocumentAnalysis["anomalies"] }) {
+  if (anomalies.length === 0) {
     return (
       <div className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900 py-12 text-center">
         <ShieldCheck size={22} className="mx-auto mb-2 text-verdigris-600" strokeWidth={1.5} />
@@ -493,7 +520,7 @@ function AnomaliesTab({ analysis }: { analysis: DocumentAnalysis }) {
   }
   return (
     <div className="space-y-2">
-      {analysis.anomalies.map((a) => {
+      {anomalies.map((a) => {
         const colors = severityColor(a.severity);
         return (
           <div key={a.id} className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900 p-4">
@@ -512,6 +539,82 @@ function AnomaliesTab({ analysis }: { analysis: DocumentAnalysis }) {
         );
       })}
     </div>
+  );
+}
+
+function findReportSection(analysis: DocumentAnalysis, heading: string): SummarySection | undefined {
+  if (typeof analysis.summary === "string" || !analysis.summary) return undefined;
+  const expectedHeading = heading.toLowerCase();
+  return analysis.summary.sections.find((section) =>
+    section.heading.replace(/^\d+\.\s*/, "").trim().toLowerCase() === expectedHeading
+  );
+}
+
+function StructuredReportSection({
+  section,
+  table = false,
+}: {
+  section: SummarySection;
+  table?: boolean;
+}) {
+  return (
+    <section className="border border-slate-300/70 dark:border-ink-700/60 rounded bg-white dark:bg-ink-900">
+      <h2 className="px-5 py-3 text-sm font-semibold text-ink-800 dark:text-paper border-b border-slate-300/70 dark:border-ink-700/60">
+        {section.heading.replace(/^\d+\.\s*/, "")}
+      </h2>
+      {section.items.length === 0 ? (
+        <p className="px-5 py-4 text-sm text-slate-500 dark:text-slate-400">
+          No information was extracted for this section.
+        </p>
+      ) : table ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-paper-dim/60 dark:bg-ink-800/60 text-xs text-slate-500 dark:text-slate-400">
+              <tr>
+                <th className="px-5 py-2 font-medium">Item</th>
+                <th className="px-5 py-2 font-medium">Document-stated value</th>
+                <th className="px-5 py-2 font-medium">Source / classification</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-300/40 dark:divide-ink-700/50">
+              {section.items.map((item, index) => (
+                <tr key={`${item.label}-${index}`} className="align-top">
+                  <td className="px-5 py-3 font-medium text-ink-800 dark:text-paper">{item.label}</td>
+                  <td className="px-5 py-3 whitespace-pre-wrap text-ink-700 dark:text-slate-200">{item.value}</td>
+                  <td className="px-5 py-3 text-xs text-slate-500 dark:text-slate-400">
+                    <span className="font-medium">{item.source_type.replace("_", " ")}</span>
+                    {item.source_location && <p className="mt-1">{item.source_location}</p>}
+                    {item.evidence && <p className="mt-1 italic">“{item.evidence}”</p>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-300/40 dark:divide-ink-700/50">
+          {section.items.map((item, index) => (
+            <article key={`${item.label}-${index}`} className="px-5 py-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <h3 className="text-sm font-medium text-ink-800 dark:text-paper">{item.label}</h3>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {item.source_type.replace("_", " ")}
+                  {item.source_location ? ` · ${item.source_location}` : ""}
+                </span>
+              </div>
+              <p className="mt-1 text-sm leading-6 text-ink-700 dark:text-slate-200 whitespace-pre-wrap break-words">
+                {item.value}
+              </p>
+              {item.evidence && (
+                <blockquote className="mt-2 border-l-2 border-verdigris-500/50 pl-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  “{item.evidence}”
+                </blockquote>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
